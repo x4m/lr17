@@ -6,9 +6,13 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Runtime.Serialization.Formatters.Binary;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Xml.Linq;
 using System.Xml.Serialization;
 using DevExpress.Utils.Text;
 using DevExpress.XtraCharts;
@@ -18,15 +22,54 @@ namespace LR17
 {
     public partial class Form1 : Form
     {
-        public Form1()
+        private readonly Mode _mode;
+        private UdpClient _client;
+        protected static readonly IPAddress MulticastAddress = new IPAddress(3873892070L);
+        protected static readonly int ServerPort = 8375;
+        protected static readonly int ClientPort = 8374;
+
+        protected static void Send(byte[] dataBytes, IPEndPoint address)
         {
+            //var dataBytes = Encoding.UTF8.GetBytes(message.ToString());
+            using (var udpClient = new UdpClient())
+                udpClient.Send(dataBytes, dataBytes.Length, address);
+        }
+
+        protected static UdpClient AttachToPort(int port)
+        {
+            var udpClient = new UdpClient(port);
+            try
+            {
+                udpClient.JoinMulticastGroup(MulticastAddress);
+            }
+            catch (Exception ex)
+            {
+                udpClient.Close();
+                throw;
+            }
+            return udpClient;
+        }
+        public Form1(Mode mode)
+        {
+            _mode = mode;
+
             InitializeComponent();
             new ChartControl();
-
-            /*TextUtils.UseKerning.GetType();
-            new SeriesPoint();
-            
-            SpinEdit.About();*/
+            switch (mode)
+            {
+                case Mode.Standalone:
+                    break;
+                case Mode.Server:
+                    Text += " режим СЕРВЕР";
+                    _client = AttachToPort(ServerPort);
+                    break;
+                case Mode.Client:
+                    _client = AttachToPort(ClientPort);
+                    Text += " режим клиента";
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException("mode");
+            }
         }
 
         private bool running;
@@ -36,38 +79,48 @@ namespace LR17
 
         private void Form1_KeyDown(object sender, KeyEventArgs e)
         {
-            if(e.KeyCode==Keys.Enter)
+            if (e.KeyCode == Keys.Enter)
             {
-                if (!running)
+                if (_mode == Mode.Standalone)
+                    EnterHit();
+                if(_mode == Mode.Client)
+                    Send(new byte[ ]{(byte)1}, new IPEndPoint(MulticastAddress, ServerPort));
+            }
+        }
+
+        private void EnterHit()
+        {
+            if (!running)
+            {
+                label1.Text = "Записываем";
+                label1.ForeColor = Color.Red;
+            }
+            else
+            {
+                label1.Text = "Ожидание";
+                try
                 {
-                    label1.Text = "Записываем";
-                    label1.ForeColor = Color.Red;
-                }
-                else
-                {
-                    label1.Text = "Ожидание";
-                    try
+                    if (File.Exists(lr17speed))
                     {
-                        if (File.Exists(lr17speed))
+                        double d;
+                        if (double.TryParse(File.ReadAllText(lr17speed), out d))
                         {
-                            double d;
-                            if (double.TryParse(File.ReadAllText(lr17speed), out d))
-                            {
-                                int ms = (int) (_data.Count/d);
-                                label1.Text += "; Ожидаемое время визуализации " + new TimeSpan(0, 0, 0,0, ms).ToString();
-                            }
+                            int ms = (int)(_data.Count / d);
+                            label1.Text += "; Ожидаемое время визуализации " + new TimeSpan(0, 0, 0, 0, ms).ToString();
                         }
                     }
-                    catch{}
-                    label1.ForeColor = Color.Black;
                 }
-                Application.DoEvents();
-                running = !running;
-                if (running)
-                    RestartRun();
-                else
-                    Stop();
+                catch
+                {
+                }
+                label1.ForeColor = Color.Black;
             }
+            Application.DoEvents();
+            running = !running;
+            if (running)
+                RestartRun();
+            else
+                Stop();
         }
 
         private void Stop()
@@ -78,17 +131,41 @@ namespace LR17
             var t = textBox1.Text;
             PrintStats();
             label1.Text = "Ожидание";
-            var form = new VisualisationForm(_data);
-            sw.Stop();
-            try
-            {
-                File.WriteAllText(lr17speed, (_data.Count / (double)sw.ElapsedMilliseconds).ToString());
-            }
-            catch
-            {}
-            
-            form.ShowDialog(this);
+            ShowVisualization(sw);
             textBox1.Text = t;
+        }
+
+        private void ShowVisualization(Stopwatch sw)
+        {
+            if (_mode == Mode.Server)
+            {
+                var ms = new MemoryStream();
+                new BinaryFormatter().Serialize(ms, _data);
+                byte[] data = ms.ToArray();
+                Send(data,new IPEndPoint(MulticastAddress, ClientPort));
+                sw.Stop();
+                try
+                {
+                    File.WriteAllText(lr17speed, (_data.Count / (double)sw.ElapsedMilliseconds).ToString());
+                }
+                catch
+                {
+                }
+            }
+            else
+            {
+                var form = new VisualisationForm(_data);
+                sw.Stop();
+                try
+                {
+                    File.WriteAllText(lr17speed, (_data.Count/(double) sw.ElapsedMilliseconds).ToString());
+                }
+                catch
+                {
+                }
+
+                form.ShowDialog(this);
+            }
         }
 
         private int? correctedX;
@@ -125,11 +202,11 @@ namespace LR17
 
         private void RestartRun()
         {
-            _data = new List<Entry>(1<<18);
+            _data = new List<Entry>(1 << 18);
             sw.Restart();
-            startx = Screen.PrimaryScreen.WorkingArea.Width/2;
+            startx = Screen.PrimaryScreen.WorkingArea.Width / 2;
             starty = Screen.PrimaryScreen.WorkingArea.Height / 2;
-            Cursor.Position = new Point(startx,starty);
+            Cursor.Position = new Point(startx, starty);
             //Cursor.Hide();
         }
 
@@ -137,27 +214,27 @@ namespace LR17
 
         private void timer_Tick(object sender, EventArgs e)
         {
-            if(running)
+            if (running)
             {
                 Point mp = MousePosition;
                 var time = sw.Elapsed;
                 var x = mp.X - startx;
                 mp.X = x;
                 var y = mp.Y - starty;
-                var cmo = _data.Count-1;
-                if(cmo>1)
+                var cmo = _data.Count - 1;
+                if (cmo > 1)
                 {
                     var lastEntry = _data[cmo];
-                    var prelastEntry = _data[cmo-1];
+                    var prelastEntry = _data[cmo - 1];
                     if (correctedX.HasValue && lastEntry.Point == prelastEntry.Point && (int)lastEntry.Point.X == x && (int)lastEntry.Point.Y == y)
                     {
                         lastEntry.Time = time;
                         return;
                     }
 
-                    if(ommitIntermediate&& cmo>3)
+                    if (ommitIntermediate && cmo > 3)
                     {
-                        var p2 = _data[cmo-2];
+                        var p2 = _data[cmo - 2];
                         var p3 = _data[cmo - 3];
                         if (lastEntry.Point.Y >= prelastEntry.Point.Y && (prelastEntry.Point.Y >= p2.Point.Y) && y >= lastEntry.Point.Y && (p2.Point.Y >= p3.Point.Y))
                         {
@@ -178,12 +255,41 @@ namespace LR17
                 }
 
                 mp.Y = y;
-                
-                _data.Add(new Entry(){Point = mp,Time = time});
+
+                _data.Add(new Entry() { Point = mp, Time = time });
+            }
+
+            if (_mode == Mode.Server)
+            {
+                if (_client.Available > 0)
+                {
+                    IPEndPoint remote = default(IPEndPoint);
+                    byte[] bytes = _client.Receive(ref remote);
+                    if (bytes.Length == 1)
+                    {
+                        EnterHit();
+                    }
+                }
+            }
+
+            if (_mode == Mode.Client)
+            {
+                if (_client.Available > 0)
+                {
+                    IPEndPoint remote = default(IPEndPoint);
+                    byte[] bytes = _client.Receive(ref remote);
+                    if (bytes.Length > 1)
+                    {
+                        var bf = new BinaryFormatter();
+                        _data = (List<Entry>) bf.Deserialize(new MemoryStream(bytes));
+                        ShowVisualization(Stopwatch.StartNew());
+                    }
+                }
             }
         }
     }
 
+  [Serializable]
     public class Entry
     {
         private TimeSpan _time;
@@ -191,7 +297,7 @@ namespace LR17
         public TimeSpan Time
         {
             get { return _time; }
-            set 
+            set
             {
                 _time = value;
                 TotalMiliseconds = value.TotalMilliseconds;
