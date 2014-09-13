@@ -1,1 +1,1 @@
-LR17.exe client
+LR17.exe server

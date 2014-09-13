@@ -30,6 +30,7 @@ namespace LR17
         private void LoadData()
         {
             chartControl1.Series[0].Points.Clear();
+            chartControl1.BeginInit();
             var s = chartControl1.Series[0];
             for (int i = 0; i < _data.Count; i++)
             {
@@ -45,6 +46,7 @@ namespace LR17
                 }
                 s.Points.Add(new SeriesPoint(entry.TotalMiliseconds, entry.Point.X));
             }
+            chartControl1.EndInit();
             InvalidateLegend();
         }
 

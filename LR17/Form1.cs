@@ -8,8 +8,10 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml.Linq;
@@ -28,11 +30,37 @@ namespace LR17
         protected static readonly int ServerPort = 8375;
         protected static readonly int ClientPort = 8374;
 
+        private const int PacketSize = 32727;
+
+        static Random rnd = new Random();
+
         protected static void Send(byte[] dataBytes, IPEndPoint address)
         {
             //var dataBytes = Encoding.UTF8.GetBytes(message.ToString());
             using (var udpClient = new UdpClient())
-                udpClient.Send(dataBytes, dataBytes.Length, address);
+            {
+                int length = (int)(dataBytes.Length / PacketSize) + 1;
+
+                int packetId = rnd.Next();
+
+                for (int i = 0; i < length; i++)
+                {
+                    var ms = new MemoryStream();
+                    var sw = new BinaryWriter(ms);
+                    sw.Write(packetId);
+                    sw.Write(i);
+                    sw.Write(length);
+                    int chunkSize = PacketSize;
+                    if (i == length - 1)
+                        chunkSize = dataBytes.Length % PacketSize;
+                    sw.Write(dataBytes, i * PacketSize, chunkSize);
+                    sw.Flush();
+
+                    byte[] pack = ms.ToArray();
+                    udpClient.Send(pack, pack.Length, address);
+                    Thread.Sleep(5);
+                }
+            }
         }
 
         protected static UdpClient AttachToPort(int port)
@@ -62,6 +90,7 @@ namespace LR17
                 case Mode.Server:
                     Text += " режим СЕРВЕР";
                     _client = AttachToPort(ServerPort);
+                    CursorToCenter();
                     break;
                 case Mode.Client:
                     _client = AttachToPort(ClientPort);
@@ -75,6 +104,8 @@ namespace LR17
         private bool running;
 
         private List<Entry> _data;
+        private Queue<Entry> _serverData = new Queue<Entry>();
+
         const string lr17speed = "lr17speed";
 
         private void Form1_KeyDown(object sender, KeyEventArgs e)
@@ -83,8 +114,8 @@ namespace LR17
             {
                 if (_mode == Mode.Standalone)
                     EnterHit();
-                if(_mode == Mode.Client)
-                    Send(new byte[ ]{(byte)1}, new IPEndPoint(MulticastAddress, ServerPort));
+                if (_mode == Mode.Client)
+                    Send(new byte[] { (byte)1 }, new IPEndPoint(MulticastAddress, ServerPort));
             }
         }
 
@@ -142,7 +173,7 @@ namespace LR17
                 var ms = new MemoryStream();
                 new BinaryFormatter().Serialize(ms, _data);
                 byte[] data = ms.ToArray();
-                Send(data,new IPEndPoint(MulticastAddress, ClientPort));
+                Send(data, new IPEndPoint(MulticastAddress, ClientPort));
                 sw.Stop();
                 try
                 {
@@ -158,7 +189,7 @@ namespace LR17
                 sw.Stop();
                 try
                 {
-                    File.WriteAllText(lr17speed, (_data.Count/(double) sw.ElapsedMilliseconds).ToString());
+                    File.WriteAllText(lr17speed, (_data.Count / (double)sw.ElapsedMilliseconds).ToString());
                 }
                 catch
                 {
@@ -199,15 +230,20 @@ namespace LR17
         int starty;
 
         Stopwatch sw = new Stopwatch();
+        Stopwatch sws = Stopwatch.StartNew();
 
         private void RestartRun()
         {
             _data = new List<Entry>(1 << 18);
             sw.Restart();
+            CursorToCenter();
+        }
+
+        private void CursorToCenter()
+        {
             startx = Screen.PrimaryScreen.WorkingArea.Width / 2;
             starty = Screen.PrimaryScreen.WorkingArea.Height / 2;
             Cursor.Position = new Point(startx, starty);
-            //Cursor.Hide();
         }
 
         private bool ommitIntermediate = LR17.Properties.Settings.Default.OmmitIntermediateDots;
@@ -216,47 +252,7 @@ namespace LR17
         {
             if (running)
             {
-                Point mp = MousePosition;
-                var time = sw.Elapsed;
-                var x = mp.X - startx;
-                mp.X = x;
-                var y = mp.Y - starty;
-                var cmo = _data.Count - 1;
-                if (cmo > 1)
-                {
-                    var lastEntry = _data[cmo];
-                    var prelastEntry = _data[cmo - 1];
-                    if (correctedX.HasValue && lastEntry.Point == prelastEntry.Point && (int)lastEntry.Point.X == x && (int)lastEntry.Point.Y == y)
-                    {
-                        lastEntry.Time = time;
-                        return;
-                    }
-
-                    if (ommitIntermediate && cmo > 3)
-                    {
-                        var p2 = _data[cmo - 2];
-                        var p3 = _data[cmo - 3];
-                        if (lastEntry.Point.Y >= prelastEntry.Point.Y && (prelastEntry.Point.Y >= p2.Point.Y) && y >= lastEntry.Point.Y && (p2.Point.Y >= p3.Point.Y))
-                        {
-                            mp.Y = y;
-                            lastEntry.Point = mp;
-                            lastEntry.Time = time;
-                            return;
-                        }
-
-                        if (lastEntry.Point.Y <= prelastEntry.Point.Y && (prelastEntry.Point.Y <= p2.Point.Y) && y <= lastEntry.Point.Y && (p2.Point.Y <= p3.Point.Y))
-                        {
-                            mp.Y = y;
-                            lastEntry.Point = mp;
-                            lastEntry.Time = time;
-                            return;
-                        }
-                    }
-                }
-
-                mp.Y = y;
-
-                _data.Add(new Entry() { Point = mp, Time = time });
+                ClientTick();
             }
 
             if (_mode == Mode.Server)
@@ -265,11 +261,25 @@ namespace LR17
                 {
                     IPEndPoint remote = default(IPEndPoint);
                     byte[] bytes = _client.Receive(ref remote);
-                    if (bytes.Length == 1)
+                    if (bytes.Length == 1 + 4 * 3)
                     {
                         EnterHit();
                     }
+                    else
+                    {
+                        var milis = BitConverter.ToDouble(bytes, 4 * 3);
+                        TimeSpan ts = TimeSpan.FromMilliseconds(milis);
+                        TimeSpan current = sws.Elapsed;
+                        var start = current - ts;
+                        List<Entry> list = _serverData.Where(ex => ex.Time > start).ToList();
+                        var ms = new MemoryStream();
+                        new BinaryFormatter().Serialize(ms, list);
+                        byte[] data = ms.ToArray();
+                        Send(data, new IPEndPoint(MulticastAddress, ClientPort));
+                    }
                 }
+
+                ServerTick();
             }
 
             if (_mode == Mode.Client)
@@ -278,18 +288,183 @@ namespace LR17
                 {
                     IPEndPoint remote = default(IPEndPoint);
                     byte[] bytes = _client.Receive(ref remote);
-                    if (bytes.Length > 1)
-                    {
-                        var bf = new BinaryFormatter();
-                        _data = (List<Entry>) bf.Deserialize(new MemoryStream(bytes));
-                        ShowVisualization(Stopwatch.StartNew());
-                    }
+                    PacketRecieved(bytes);
                 }
             }
         }
+
+        readonly Dictionary<int, List<byte[]>> _buffers = new Dictionary<int, List<byte[]>>();
+
+        private void PacketRecieved(byte[] bytes)
+        {
+            int packetId;
+            int cnt;
+            using (var binaryReader = new BinaryReader(new MemoryStream(bytes)))
+            {
+                packetId = binaryReader.ReadInt32();
+                int n = binaryReader.ReadInt32();
+                cnt = binaryReader.ReadInt32();
+            }
+
+            if (!_buffers.ContainsKey(packetId))
+                _buffers[packetId] = new List<byte[]>();
+
+            List<byte[]> list = _buffers[packetId];
+
+            list.Add(bytes);
+
+            if (list.Count == cnt)
+            {
+                _buffers.Remove(packetId);
+
+                int length = 0;
+
+                byte[] total = new byte[cnt * PacketSize];
+
+                foreach (var array in list)
+                {
+                    using (var binaryReader = new BinaryReader(new MemoryStream(array)))
+                    {
+                        packetId = binaryReader.ReadInt32();
+                        int n = binaryReader.ReadInt32();
+                        cnt = binaryReader.ReadInt32();
+                        for (int i = 0; i < array.Length - 12; i++)
+                        {
+                            total[n * PacketSize + i] = array[i + 12];
+                        }
+                        length = Math.Max(n * PacketSize + array.Length - 12, length);
+                    }
+                }
+
+
+                var bf = new BinaryFormatter();
+                _data = (List<Entry>)bf.Deserialize(new MemoryStream(total, 0, length));
+                ShowVisualization(Stopwatch.StartNew());
+
+            }
+        }
+
+        private void ServerTick()
+        {
+            Point mp = MousePosition;
+            var time = sws.Elapsed;
+            var x = mp.X - startx;
+            mp.X = x;
+            var y = mp.Y - starty;
+            var cmo = _serverData.Count - 1;
+            if (cmo > 1)
+            {
+                var lastEntry = _serverData.Peek();
+                var prelastEntry = _serverData.ElementAt(cmo - 1);
+                if (correctedX.HasValue && lastEntry.Point == prelastEntry.Point && (int)lastEntry.Point.X == x &&
+                    (int)lastEntry.Point.Y == y)
+                {
+                    lastEntry.Time = time;
+                    return;
+                }
+
+                if (ommitIntermediate && cmo > 3)
+                {
+                    var p2 = _serverData.ElementAt(cmo - 2);
+                    var p3 = _serverData.ElementAt(cmo - 3);
+                    if (lastEntry.Point.Y >= prelastEntry.Point.Y && (prelastEntry.Point.Y >= p2.Point.Y) &&
+                        y >= lastEntry.Point.Y && (p2.Point.Y >= p3.Point.Y))
+                    {
+                        mp.Y = y;
+                        lastEntry.Point = mp;
+                        lastEntry.Time = time;
+                        return;
+                    }
+
+                    if (lastEntry.Point.Y <= prelastEntry.Point.Y && (prelastEntry.Point.Y <= p2.Point.Y) &&
+                        y <= lastEntry.Point.Y && (p2.Point.Y <= p3.Point.Y))
+                    {
+                        mp.Y = y;
+                        lastEntry.Point = mp;
+                        lastEntry.Time = time;
+                        return;
+                    }
+                }
+            }
+
+            mp.Y = y;
+
+            _serverData.Enqueue(new Entry() { Point = mp, Time = time });
+
+            while (_serverData.First().Time < sw.Elapsed - TimeSpan.FromMinutes(10))
+                _serverData.Dequeue();
+        }
+
+        private void ClientTick()
+        {
+            Point mp = MousePosition;
+            var time = sw.Elapsed;
+            var x = mp.X - startx;
+            mp.X = x;
+            var y = mp.Y - starty;
+            var cmo = _data.Count - 1;
+            if (cmo > 1)
+            {
+                var lastEntry = _data[cmo];
+                var prelastEntry = _data[cmo - 1];
+                if (correctedX.HasValue && lastEntry.Point == prelastEntry.Point && (int)lastEntry.Point.X == x &&
+                    (int)lastEntry.Point.Y == y)
+                {
+                    lastEntry.Time = time;
+                    return;
+                }
+
+                if (ommitIntermediate && cmo > 3)
+                {
+                    var p2 = _data[cmo - 2];
+                    var p3 = _data[cmo - 3];
+                    if (lastEntry.Point.Y >= prelastEntry.Point.Y && (prelastEntry.Point.Y >= p2.Point.Y) &&
+                        y >= lastEntry.Point.Y && (p2.Point.Y >= p3.Point.Y))
+                    {
+                        mp.Y = y;
+                        lastEntry.Point = mp;
+                        lastEntry.Time = time;
+                        return;
+                    }
+
+                    if (lastEntry.Point.Y <= prelastEntry.Point.Y && (prelastEntry.Point.Y <= p2.Point.Y) &&
+                        y <= lastEntry.Point.Y && (p2.Point.Y <= p3.Point.Y))
+                    {
+                        mp.Y = y;
+                        lastEntry.Point = mp;
+                        lastEntry.Time = time;
+                        return;
+                    }
+                }
+            }
+
+            mp.Y = y;
+
+            _data.Add(new Entry() { Point = mp, Time = time });
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            if (_mode == Mode.Client)
+            {
+                dateTimePicker1.Visible = true;
+                button1.Visible = true;
+            }
+        }
+
+        private void button1_Click(object sender, EventArgs e)
+        {
+            var dt = dateTimePicker1.Value.TimeOfDay;
+            if (dt > TimeSpan.FromMinutes(10))
+                dt = TimeSpan.FromMinutes(10);
+
+            byte[] bytes = BitConverter.GetBytes(dt.TotalMilliseconds);
+
+            Send(bytes, new IPEndPoint(MulticastAddress, ServerPort));
+        }
     }
 
-  [Serializable]
+    [Serializable]
     public class Entry
     {
         private TimeSpan _time;
