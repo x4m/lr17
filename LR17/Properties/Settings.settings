@@ -8,5 +8,11 @@
     <Setting Name="Mode" Type="System.String" Scope="User">
       <Value Profile="(Default)">Standalone</Value>
     </Setting>
+    <Setting Name="ServerAdress" Type="System.String" Scope="User">
+      <Value Profile="(Default)">ab12</Value>
+    </Setting>
+    <Setting Name="ClientAddress" Type="System.String" Scope="User">
+      <Value Profile="(Default)">127.0.0.1</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

@@ -19,14 +19,15 @@ using System.Xml.Serialization;
 using DevExpress.Utils.Text;
 using DevExpress.XtraCharts;
 using DevExpress.XtraEditors;
+using LR17.Properties;
 
 namespace LR17
 {
     public partial class Form1 : Form
     {
         private readonly Mode _mode;
-        private UdpClient _client;
-        protected static readonly IPAddress MulticastAddress = new IPAddress(3873892070L);
+        private TcpListener _client;
+        
         protected static readonly int ServerPort = 8375;
         protected static readonly int ClientPort = 8374;
 
@@ -36,46 +37,18 @@ namespace LR17
 
         protected static void Send(byte[] dataBytes, IPEndPoint address)
         {
-            //var dataBytes = Encoding.UTF8.GetBytes(message.ToString());
-            using (var udpClient = new UdpClient())
+            using (var client = new TcpClient())
             {
-                int length = (int)(dataBytes.Length / PacketSize) + 1;
-
-                int packetId = rnd.Next();
-
-                for (int i = 0; i < length; i++)
-                {
-                    var ms = new MemoryStream();
-                    var sw = new BinaryWriter(ms);
-                    sw.Write(packetId);
-                    sw.Write(i);
-                    sw.Write(length);
-                    int chunkSize = PacketSize;
-                    if (i == length - 1)
-                        chunkSize = dataBytes.Length % PacketSize;
-                    sw.Write(dataBytes, i * PacketSize, chunkSize);
-                    sw.Flush();
-
-                    byte[] pack = ms.ToArray();
-                    udpClient.Send(pack, pack.Length, address);
-                    Thread.Sleep(5);
-                }
+                client.Connect(address);
+                client.GetStream().Write(dataBytes, 0,dataBytes.Length);
             }
         }
 
-        protected static UdpClient AttachToPort(int port)
+        protected static TcpListener AttachToPort(int port)
         {
-            var udpClient = new UdpClient(port);
-            try
-            {
-                udpClient.JoinMulticastGroup(MulticastAddress);
-            }
-            catch (Exception ex)
-            {
-                udpClient.Close();
-                throw;
-            }
-            return udpClient;
+            var tcpListener = new TcpListener(port);
+            tcpListener.Start();
+            return tcpListener;
         }
         public Form1(Mode mode)
         {
@@ -115,7 +88,7 @@ namespace LR17
                 if (_mode == Mode.Standalone)
                     EnterHit();
                 if (_mode == Mode.Client)
-                    Send(new byte[] { (byte)1 }, new IPEndPoint(MulticastAddress, ServerPort));
+                    Send(new byte[] { (byte)1 }, new IPEndPoint(Dns.GetHostAddresses(Settings.Default.ServerAdress).First(a => a.AddressFamily == AddressFamily.InterNetwork), ServerPort));
             }
         }
 
@@ -173,7 +146,7 @@ namespace LR17
                 var ms = new MemoryStream();
                 new BinaryFormatter().Serialize(ms, _data);
                 byte[] data = ms.ToArray();
-                Send(data, new IPEndPoint(MulticastAddress, ClientPort));
+                Send(data, new IPEndPoint(Dns.GetHostAddresses(Settings.Default.ClientAddress).First(a => a.AddressFamily == AddressFamily.InterNetwork), ClientPort));
                 sw.Stop();
                 try
                 {
@@ -257,17 +230,25 @@ namespace LR17
 
             if (_mode == Mode.Server)
             {
-                if (_client.Available > 0)
+                if (_client.Pending())
                 {
-                    IPEndPoint remote = default(IPEndPoint);
-                    byte[] bytes = _client.Receive(ref remote);
-                    if (bytes.Length == 1 + 4 * 3)
+                    TcpClient client = _client.AcceptTcpClient();
+                    var ns = client.GetStream();
+                    List<byte> bytes = new List<byte>();
+                    while (ns.DataAvailable)
+                    {
+                        bytes.Add((byte) ns.ReadByte());
+                    }
+                    client.Close();
+
+                    
+                    if (bytes.Count == 1)
                     {
                         EnterHit();
                     }
                     else
                     {
-                        var milis = BitConverter.ToDouble(bytes, 4 * 3);
+                        var milis = BitConverter.ToDouble(bytes.ToArray(),0);
                         TimeSpan ts = TimeSpan.FromMilliseconds(milis);
                         TimeSpan current = sws.Elapsed;
                         var start = current - ts;
@@ -275,7 +256,7 @@ namespace LR17
                         var ms = new MemoryStream();
                         new BinaryFormatter().Serialize(ms, list);
                         byte[] data = ms.ToArray();
-                        Send(data, new IPEndPoint(MulticastAddress, ClientPort));
+                        Send(data, new IPEndPoint(Dns.GetHostAddresses(Settings.Default.ClientAddress).First(a => a.AddressFamily == AddressFamily.InterNetwork), ClientPort));
                     }
                 }
 
@@ -284,65 +265,27 @@ namespace LR17
 
             if (_mode == Mode.Client)
             {
-                if (_client.Available > 0)
+                if (_client.Pending())
                 {
-                    IPEndPoint remote = default(IPEndPoint);
-                    byte[] bytes = _client.Receive(ref remote);
-                    PacketRecieved(bytes);
+                    TcpClient client = _client.AcceptTcpClient();
+                    var ns = client.GetStream();
+                    List<byte> bytes = new List<byte>();
+                    while (ns.DataAvailable)
+                    {
+                        bytes.Add((byte)ns.ReadByte());
+                    }
+                    client.Close();
+
+                    var bf = new BinaryFormatter();
+                    _data = (List<Entry>)bf.Deserialize(new MemoryStream(bytes.ToArray()));
+                    ShowVisualization(Stopwatch.StartNew());
                 }
             }
         }
 
         readonly Dictionary<int, List<byte[]>> _buffers = new Dictionary<int, List<byte[]>>();
 
-        private void PacketRecieved(byte[] bytes)
-        {
-            int packetId;
-            int cnt;
-            using (var binaryReader = new BinaryReader(new MemoryStream(bytes)))
-            {
-                packetId = binaryReader.ReadInt32();
-                int n = binaryReader.ReadInt32();
-                cnt = binaryReader.ReadInt32();
-            }
-
-            if (!_buffers.ContainsKey(packetId))
-                _buffers[packetId] = new List<byte[]>();
-
-            List<byte[]> list = _buffers[packetId];
-
-            list.Add(bytes);
-
-            if (list.Count == cnt)
-            {
-                _buffers.Remove(packetId);
-
-                int length = 0;
-
-                byte[] total = new byte[cnt * PacketSize];
-
-                foreach (var array in list)
-                {
-                    using (var binaryReader = new BinaryReader(new MemoryStream(array)))
-                    {
-                        packetId = binaryReader.ReadInt32();
-                        int n = binaryReader.ReadInt32();
-                        cnt = binaryReader.ReadInt32();
-                        for (int i = 0; i < array.Length - 12; i++)
-                        {
-                            total[n * PacketSize + i] = array[i + 12];
-                        }
-                        length = Math.Max(n * PacketSize + array.Length - 12, length);
-                    }
-                }
-
-
-                var bf = new BinaryFormatter();
-                _data = (List<Entry>)bf.Deserialize(new MemoryStream(total, 0, length));
-                ShowVisualization(Stopwatch.StartNew());
-
-            }
-        }
+        
 
         private void ServerTick()
         {
@@ -460,7 +403,7 @@ namespace LR17
 
             byte[] bytes = BitConverter.GetBytes(dt.TotalMilliseconds);
 
-            Send(bytes, new IPEndPoint(MulticastAddress, ServerPort));
+            Send(bytes, new IPEndPoint(Dns.GetHostAddresses(Settings.Default.ServerAdress).First(a => a.AddressFamily == AddressFamily.InterNetwork), ServerPort));
         }
     }
 
