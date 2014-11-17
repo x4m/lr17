@@ -278,6 +278,12 @@ namespace LR17
 
                     var bf = new BinaryFormatter();
                     _data = (List<Entry>)bf.Deserialize(new MemoryStream(bytes.ToArray()));
+                    var start = _data.Min(d=>d.TotalMiliseconds);
+                    foreach (var entry in _data)
+                    {
+                        entry.TotalMiliseconds -= start;
+                    }
+
                     ShowVisualization(Stopwatch.StartNew());
                 }
             }
