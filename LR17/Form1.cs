@@ -50,8 +50,12 @@ namespace LR17
             tcpListener.Start();
             return tcpListener;
         }
+
+        public static Form1 Instance;
+
         public Form1(Mode mode)
         {
+            Instance = this;
             _mode = mode;
 
             InitializeComponent();
@@ -72,6 +76,11 @@ namespace LR17
                 default:
                     throw new ArgumentOutOfRangeException("mode");
             }
+        }
+
+        public Mode Mode
+        {
+            get { return _mode; }
         }
 
         private bool running;
@@ -168,7 +177,7 @@ namespace LR17
                 {
                 }
 
-                form.ShowDialog(this);
+                form.Show(this);
             }
         }
 
@@ -403,13 +412,21 @@ namespace LR17
 
         private void button1_Click(object sender, EventArgs e)
         {
+            QueryServer();
+        }
+
+        public void QueryServer()
+        {
             var dt = dateTimePicker1.Value.TimeOfDay;
             if (dt > TimeSpan.FromMinutes(10))
                 dt = TimeSpan.FromMinutes(10);
 
             byte[] bytes = BitConverter.GetBytes(dt.TotalMilliseconds);
 
-            Send(bytes, new IPEndPoint(Dns.GetHostAddresses(Settings.Default.ServerAdress).First(a => a.AddressFamily == AddressFamily.InterNetwork), ServerPort));
+            Send(bytes,
+                new IPEndPoint(
+                    Dns.GetHostAddresses(Settings.Default.ServerAdress)
+                        .First(a => a.AddressFamily == AddressFamily.InterNetwork), ServerPort));
         }
     }
 

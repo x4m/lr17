@@ -17,10 +17,13 @@ namespace LR17
     {
         private List<Entry> _data;
 
+        private static int _count;
+
         public VisualisationForm(List<Entry> data)
         {
             _data = data;
             InitializeComponent();
+            Text += " " + (++_count);
 
             LoadData();
         }
@@ -112,7 +115,10 @@ namespace LR17
 
         private void button5_Click(object sender, EventArgs e)
         {
-            Close();
+            if (Form1.Instance.Mode != Mode.Client)
+                Close();
+            else
+                Form1.Instance.QueryServer();
         }
 
         private void button6_Click(object sender, EventArgs e)
