@@ -223,6 +223,9 @@ namespace LR17
 
         private void CursorToCenter()
         {
+            startx = Cursor.Position.X;
+            starty = Cursor.Position.Y;
+            return;
             startx = Screen.PrimaryScreen.WorkingArea.Width / 2;
             starty = Screen.PrimaryScreen.WorkingArea.Height / 2;
             Cursor.Position = new Point(startx, starty);
