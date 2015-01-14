@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Windows.Forms;
 using LR17.Properties;
 
@@ -25,6 +26,10 @@ namespace LR17
                 mode = Mode.Server;
             else if (Settings.Default.Mode.ToLower().Contains("cli"))
                 mode = Mode.Client;
+
+            if(mode == Mode.Server)
+                Thread.Sleep(3000);
+
             Application.Run(new Form1(mode));
         }
     }
