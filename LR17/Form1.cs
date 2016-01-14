@@ -139,7 +139,7 @@ namespace LR17
             }
             else
             {
-                correctedX = (int?)avgX;
+                //correctedX = (int?)avgX;
             }
         }
 
