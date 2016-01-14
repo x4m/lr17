@@ -115,10 +115,7 @@ namespace LR17
 
         private void button5_Click(object sender, EventArgs e)
         {
-            if (Form1.Instance.Mode != Mode.Client)
                 Close();
-            else
-                Form1.Instance.QueryServer();
         }
 
         private void button6_Click(object sender, EventArgs e)

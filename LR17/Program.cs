@@ -17,20 +17,8 @@ namespace LR17
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Mode mode = Mode.Client;
-            if(args.Any(a=>a.ToLower().Contains("s")))
-                mode = Mode.Server;
-            else if(args.Any(a=>a.ToLower().Contains("c")))
-                mode = Mode.Client;
-            else if(Settings.Default.Mode.ToLower().Contains("serv"))
-                mode = Mode.Server;
-            else if (Settings.Default.Mode.ToLower().Contains("cli"))
-                mode = Mode.Client;
 
-            if(mode == Mode.Server)
-                Thread.Sleep(3000);
-
-            Application.Run(new Form1(mode));
+            Application.Run(new Form1());
         }
     }
 
